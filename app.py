@@ -16,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain_community.tools import WikipediaQueryRun
 from langgraph.graph import END, StateGraph, START
-from langchain.schema import Document
+from langchain.schema import Document   
 from pydantic import BaseModel, Field
 
 # --- Disable tokenizer warning ---
@@ -82,8 +82,12 @@ def setup_pipeline(custom_urls=None):
     load_dotenv()
     
     # Initialize AstraDB
-    ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-    ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
+    # ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
+    # ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
+    ASTRA_DB_APPLICATION_TOKEN = st.secrets["ASTRA_DB_APPLICATION_TOKEN"]
+    ASTRA_DB_ID = st.secrets["ASTRA_DB_ID"]
+    GROQ_KEY = st.secrets["GROQ_KEY"]
+    HF_TOKEN = st.secrets["HF_TOKEN"]
 
     cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
@@ -115,9 +119,9 @@ def setup_pipeline(custom_urls=None):
     retriever = astra_vector_store.as_retriever()
 
     # LLMs initialization
-    groq_key = os.getenv("GROQ_KEY")
-    llm_router = ChatGroq(groq_api_key=groq_key, model_name="llama3-8b-8192")
-    llm = ChatGroq(groq_api_key=groq_key, model_name="llama3-8b-8192")
+    #GROQ_KEY = os.getenv("GROQ_KEY")
+    llm_router = ChatGroq(groq_api_key=GROQ_KEY, model_name="llama3-8b-8192")
+    llm = ChatGroq(groq_api_key=GROQ_KEY, model_name="llama3-8b-8192")
 
     # Routing configuration
     class RouteQuery(BaseModel):
