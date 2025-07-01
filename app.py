@@ -84,6 +84,8 @@ def setup_pipeline(custom_urls=None):
     # Initialize AstraDB
     # ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
     # ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
+    # GROQ_KEY = os.getenv("GROQ_KEY")
+    # HF_TOKEN = os.getenv("HF_TOKEN")
     ASTRA_DB_APPLICATION_TOKEN = st.secrets["ASTRA_DB_APPLICATION_TOKEN"]
     ASTRA_DB_ID = st.secrets["ASTRA_DB_ID"]
     GROQ_KEY = st.secrets["GROQ_KEY"]
@@ -97,15 +99,22 @@ def setup_pipeline(custom_urls=None):
         "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
         "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
     ]
-    docs = [WebBaseLoader(url).load() for url in urls]
-    docs_list = [item for sublist in docs for item in sublist]
-
+    docs = []
+    for url in urls:
+        loaded = WebBaseLoader(url).load()
+        for doc in loaded:
+            doc.metadata["source"] = url
+        docs.extend(loaded)
+        
     # Text splitting
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=700, 
         chunk_overlap=30
     )
-    splits = splitter.split_documents(docs_list)
+
+    splits = splitter.split_documents(docs) 
+
+    
 
     # Embeddings and vector store
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -216,9 +225,18 @@ def get_answer(app, question, llm):
     # Process results
     if final_value and "documents" in final_value:
         context = extract_answer(final_value["documents"])
+        sources = list({
+            doc.metadata.get("source", "Wikipedia")
+            for doc in final_value["documents"]
+        })
+
         prompt = f"""
-        You are a helpful assistant. Answer the following question using ONLY the provided context.
-        Be concise, accurate, and include key details. If the answer is not directly in the context, try to infer related insights based on it. Do not make up facts.
+        You are an expert assistant helping answer user questions using the provided context.
+
+Your job is to provide an accurate, informative, and well-structured answer using only the context below.
+If the context doesn't cover the full answer, you can still infer reasonable insights — but do not hallucinate or make up data.
+
+Make the answer clear and helpful, even for beginners.
 
         Context:
         {context}
@@ -231,9 +249,9 @@ def get_answer(app, question, llm):
         result = llm.invoke(prompt)
         # Determine source information
         source_type = "Wikipedia" if "wikipedia" in context.lower() else "Knowledge Base"
-        return result.content.strip(), source_type
+        return result.content.strip(), sources
 
-    return "I couldn't find an answer to that question.", "None"
+    return "I couldn't find an answer to that question.", ["None"]
 
 
 # --- Main Chat Interface ---
@@ -272,15 +290,17 @@ def main():
             message_placeholder.markdown(answer)
             
             # Display source info
-            # if source != "None":
-            #     st.caption(f"Source: {source}")
+            for src in source:
+                st.caption(f"Source: {src}")
+
+
         
         # Add assistant response to chat history
         st.session_state.messages.append({
             "role": "assistant",
             "content": answer
-            # ,
-            # "source": source
+            ,
+            "source": source
         })
 
 if __name__ == "__main__":
