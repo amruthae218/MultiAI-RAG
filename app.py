@@ -1,9 +1,7 @@
 import os
 import streamlit as st
-from typing import List, Literal
+from typing import List, Any
 from typing_extensions import TypedDict
-import re
-import time
 
 import cassio
 from dotenv import load_dotenv
@@ -12,12 +10,10 @@ from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.vectorstores import Cassandra
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain_community.tools import WikipediaQueryRun
 from langgraph.graph import END, StateGraph, START
-from langchain.schema import Document   
-from pydantic import BaseModel, Field
+from langchain.schema import Document
 
 # --- Disable tokenizer warning ---
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -44,18 +40,14 @@ st.caption("Powered by LangChain, Groq, and Astra DB")
 # Sidebar for configuration
 with st.sidebar:
     st.header("Configuration")
-
     user_urls = st.text_input(
         "Custom Knowledge Sources (comma-separated URLs):",
         placeholder="https://example.com, https://another.com",
         help="Leave this empty to use the default knowledge base."
     )
     st.caption("**Note:** Press ⏎ Enter after typing URLs to apply them.")
-
     st.caption("Default sources include Lilian Weng's blog posts on agents, prompt engineering, and adversarial attacks.")
-
     st.divider()
-
     st.subheader("How It Works")
     st.markdown("""
     - Ask a question below in the chat interface.
@@ -63,37 +55,28 @@ with st.sidebar:
     - If no relevant answer is found, it falls back to Wikipedia.
     - A final answer is generated using the most relevant context.
     """)
-
-    # st.divider()
-
-    # st.subheader("Recommended Topics")
-    # st.markdown("""
-    # This assistant works best with questions related to:
-    # - Prompt engineering
-    # - Adversarial attacks on LLMs
-    # - General AI/ML topics
-    # """)
-
     st.caption("Example: Explain Adversarial attacks on LLMs?")
+
+from langchain_community.document_loaders import BSHTMLLoader
+import requests
+from bs4 import BeautifulSoup
 
 # --- RAG Pipeline Setup ---
 @st.cache_resource(show_spinner=False)
 def setup_pipeline(custom_urls=None):
     load_dotenv()
-    
-    # Initialize AstraDB
-    # ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-    # ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
-    # GROQ_KEY = os.getenv("GROQ_KEY")
-    # HF_TOKEN = os.getenv("HF_TOKEN")
-    ASTRA_DB_APPLICATION_TOKEN = st.secrets["ASTRA_DB_APPLICATION_TOKEN"]
-    ASTRA_DB_ID = st.secrets["ASTRA_DB_ID"]
-    GROQ_KEY = st.secrets["GROQ_KEY"]
-    HF_TOKEN = st.secrets["HF_TOKEN"]
+
+    ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
+    ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
+    GROQ_KEY = os.getenv("GROQ_KEY")
+    HF_TOKEN = os.getenv("HF_TOKEN")
+
+    if not (ASTRA_DB_APPLICATION_TOKEN and ASTRA_DB_ID and GROQ_KEY):
+        st.error("One or more environment variables (ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_ID, GROQ_KEY) are missing!")
+        st.stop()
 
     cassio.init(token=ASTRA_DB_APPLICATION_TOKEN, database_id=ASTRA_DB_ID)
 
-    # Document loading
     urls = custom_urls or [
         "https://lilianweng.github.io/posts/2023-06-23-agent/",
         "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
@@ -101,206 +84,261 @@ def setup_pipeline(custom_urls=None):
     ]
     docs = []
     for url in urls:
-        loaded = WebBaseLoader(url).load()
-        for doc in loaded:
-            doc.metadata["source"] = url
-        docs.extend(loaded)
-        
-    # Text splitting
-    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=700, 
-        chunk_overlap=30
-    )
+        st.write(f"Loading {url} ...")
+        try:
+            loaded = WebBaseLoader(url).load()
+            for doc in loaded:
+                doc.metadata["source"] = url
+            docs.extend(loaded)
+        except Exception as e:
+            st.warning(f"Failed to load {url}: {e}")
 
-    splits = splitter.split_documents(docs) 
+    st.write(f"Loaded {len(docs)} documents from URLs")
+    if len(docs) > 0:
+        st.write(docs[:1])  # Show a sample document for debugging
 
-    
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=700, chunk_overlap=30)
+    splits = splitter.split_documents(docs)
+    st.write(f"Split into {len(splits)} document chunks")
 
-    # Embeddings and vector store
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+    # IMPORTANT FIX: Provide session and keyspace for Cassandra connection here
+    # Replace these placeholders with your actual Astra DB session and keyspace objects or connection
+    # For example (pseudo code):
+    # from cassandra.cluster import Cluster
+    # cluster = Cluster([...])
+    # session = cluster.connect('your_keyspace')
+    # astra_vector_store = Cassandra(..., session=session, keyspace='your_keyspace')
+
+    # For demonstration, we'll initialize without session/keyspace but this needs to be fixed by user
+    session = None
+    keyspace = None
+
     astra_vector_store = Cassandra(
-        embedding=embeddings, 
-        table_name="qa_mini_demo", 
-        session=None, 
-        keyspace=None
+        embedding=embeddings,
+        table_name="qa_mini_demo",
+        session=session,
+        keyspace=keyspace
     )
-    astra_vector_store.add_documents(splits)
+
+    try:
+        astra_vector_store.add_documents(splits)
+        st.write("Documents added to vectorstore.")
+    except Exception as e:
+        st.error(f"Error adding docs to vector store: {e}")
+
     retriever = astra_vector_store.as_retriever()
 
-    # LLMs initialization
-    #GROQ_KEY = os.getenv("GROQ_KEY")
-    llm_router = ChatGroq(groq_api_key=GROQ_KEY, model_name="llama3-8b-8192")
     llm = ChatGroq(groq_api_key=GROQ_KEY, model_name="llama3-8b-8192")
 
-    # Routing configuration
-    class RouteQuery(BaseModel):
-        datasource: Literal["vectorstore", "wiki_search"] = Field(...)
-
-    system = (
-        "You are an expert at routing user questions to appropriate sources.\n"
-        "Use the vectorstore for: LLM agents, prompt engineering, adversarial attacks.\n"
-        "For all other topics, use Wikipedia search."
-    )
-    route_prompt = ChatPromptTemplate.from_messages([
-        ("system", system), 
-        ("human", "{question}")
-    ])
-    structured_router = llm_router.with_structured_output(RouteQuery)
-    question_router = route_prompt | structured_router
-
-    # Wikipedia tool
     api_wrapper = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=500)
     wiki = WikipediaQueryRun(api_wrapper=api_wrapper)
 
-    # LangGraph workflow
-    class GraphState(TypedDict):
-        question: str
-        generation: str
-        documents: List[Document]
+    return retriever, wiki, llm
 
-    def retrieve(state):
-        """Retrieve documents from vector store"""
-        question = state["question"]
-        documents = retriever.invoke(question)
-        return {"documents": documents, "question": question}
+# --- Fixed GraphState with retriever/wiki/llm ---
+class GraphState(TypedDict):
+    question: str
+    documents: List[Document]
+    vector_confident: bool
+    generation: str
+    retriever: Any
+    wiki: Any
+    llm: Any
 
-    def wiki_search(state):
-        """Search Wikipedia for answers"""
-        question = state["question"]
-        docs = wiki.invoke({"query": question})
-        return {"documents": [Document(page_content=docs)], "question": question}
-
-    def route_question(state):
-        """Determine data source for query"""
-        question = state["question"]
-        source = question_router.invoke({"question": question})
-        return source.datasource
-
-    # Build workflow
-    workflow = StateGraph(GraphState)
-    workflow.add_node("wiki_search", wiki_search)
-    workflow.add_node("retrieve", retrieve)
-    workflow.add_conditional_edges(
-        START, 
-        route_question, 
-        {"wiki_search": "wiki_search", "vectorstore": "retrieve"}
-    )
-    workflow.add_edge("wiki_search", END)
-    workflow.add_edge("retrieve", END)
-    
-    return workflow.compile(), llm
-
-# --- Answer Processing Functions ---
+# --- Extract Answer Helper ---
 def extract_answer(docs: List[Document]) -> str:
-    """Process and clean document content for answer generation"""
     seen = set()
     chunks = []
-    for doc in docs[:3]:  # Consider top 3 documents
+    for doc in docs[:3]:
         lines = doc.page_content.split("\n")
         for line in lines:
             clean = line.strip()
-            if (not clean or 
-                clean.lower() in seen or
-                any(clean.lower().startswith(prefix) 
-                    for prefix in ("table of contents", "posts", "archive", "faq", "tags", "|"))):
+            if not clean or clean.lower() in seen or any(clean.lower().startswith(prefix) for prefix in (
+                "table of contents", "posts", "archive", "faq", "tags", "|")):
                 continue
             seen.add(clean.lower())
             chunks.append(clean)
-    
-    # Merge and truncate at last complete sentence
     merged = "\n\n".join(chunks).strip()
     last_period = merged.rfind(".")
     return merged[:last_period + 1] if last_period != -1 else merged
 
-def get_answer(app, question, llm):
-    """Execute RAG workflow and generate final answer with simple source attribution."""
-    inputs = {"question": question}
-    final_value = None
+# --- Vectorstore Retrieval Node ---
+def retrieve_vectorstore(state):
+    question = state["question"]
+    threshold = 0  # Set to 0 during debugging to avoid filtering out docs
+    retriever = state["retriever"]
 
-    # Execute workflow
-    for output in app.stream(inputs):
-        for key, value in output.items():
-            final_value = value
+    results = []
+    if hasattr(retriever, "similarity_search_with_score"):
+        try:
+            results = retriever.similarity_search_with_score(question, k=3)
+        except Exception as e:
+            st.warning(f"Error during similarity search: {e}")
+    elif hasattr(retriever, "vectorstore"):
+        try:
+            results = retriever.vectorstore.similarity_search_with_score(question, k=3)
+        except Exception as e:
+            st.warning(f"Error during vectorstore similarity search: {e}")
+    else:
+        try:
+            docs = retriever.invoke(question)
+            return {**state, "documents": docs, "vector_confident": False}
+        except Exception as e:
+            st.warning(f"Error invoking retriever: {e}")
+            return {**state, "documents": [], "vector_confident": False}
 
-    # Process results
-    if final_value and "documents" in final_value:
-        context = extract_answer(final_value["documents"])
-        sources = list({
-            doc.metadata.get("source", "Wikipedia")
-            for doc in final_value["documents"]
-        })
+    st.write(f"Similarity results (score/source): {[ (score, doc.metadata.get('source', '')) for doc, score in results ]}")
 
-        prompt = f"""
-        You are an expert assistant helping answer user questions using the provided context.
+    confident = False
+    docs = []
+    for doc, score in results:
+        if score >= threshold:
+            confident = True
+            docs.append(doc)
+
+    st.write(f"Docs passed to generation (count): {len(docs)}")
+
+    return {**state, "documents": docs if confident else [], "vector_confident": confident}
+
+# --- Wikipedia Retrieval Node ---
+def retrieve_wikipedia(state):
+    question = state["question"]
+    wiki = state["wiki"]
+    try:
+        wiki_text = wiki.invoke({"query": question})
+    except Exception as e:
+        st.warning(f"Wikipedia API error: {e}")
+        wiki_text = ""
+    docs = [Document(page_content=wiki_text, metadata={"source": "Wikipedia"})]
+    return {**state, "documents": docs, "vector_confident": False}
+
+# --- Final Answer Generation Node ---
+def generate_final_answer(state):
+    question = state["question"]
+    docs = state["documents"]
+    llm = state["llm"]
+    context = extract_answer(docs)
+    st.write(f"Context used for generation:\n{context}")
+
+    prompt = f"""
+You are an expert assistant helping answer user questions using the provided context.
 
 Your job is to provide an accurate, informative, and well-structured answer using only the context below.
 If the context doesn't cover the full answer, you can still infer reasonable insights — but do not hallucinate or make up data.
 
 Make the answer clear and helpful, even for beginners.
 
-        Context:
-        {context}
+Context:
+{context}
 
-        Question:
-        {question}
+Question:
+{question}
 
-        Answer:
-        """
+Answer:
+"""
+    try:
         result = llm.invoke(prompt)
-        # Determine source information
-        source_type = "Wikipedia" if "wikipedia" in context.lower() else "Knowledge Base"
-        return result.content.strip(), sources
+        st.write(f"LLM raw result: {result}")
+        
+        # Fix: Better handling of LLM response
+        if hasattr(result, "content") and result.content and result.content.strip():
+            return {**state, "generation": result.content.strip()}
+        elif isinstance(result, str) and result.strip():
+            return {**state, "generation": result.strip()}
+        else:
+            return {**state, "generation": "Sorry, I couldn't generate a proper answer from the available context."}
+            
+    except Exception as e:
+        st.error(f"LLM invocation error: {e}")
+        return {**state, "generation": "Sorry, I couldn't generate an answer due to an LLM error."}
 
-    return "I couldn't find an answer to that question.", ["None"]
+# --- Build LangGraph Workflow ---
+def build_workflow(retriever, wiki, llm):
+    workflow = StateGraph(GraphState)
 
+    workflow.add_node("retrieve_vectorstore", retrieve_vectorstore)
+    workflow.add_node("retrieve_wikipedia", retrieve_wikipedia)
+    workflow.add_node("generate_final_answer", generate_final_answer)
 
-# --- Main Chat Interface ---
+    def route_after_vectorstore(state):
+        return "generate_final_answer" if state["vector_confident"] else "retrieve_wikipedia"
+
+    workflow.add_edge(START, "retrieve_vectorstore")
+    workflow.add_conditional_edges("retrieve_vectorstore", route_after_vectorstore, {
+        "generate_final_answer": "generate_final_answer",
+        "retrieve_wikipedia": "retrieve_wikipedia"
+    })
+    workflow.add_edge("retrieve_wikipedia", "generate_final_answer")
+    workflow.add_edge("generate_final_answer", END)
+
+    compiled = workflow.compile()
+
+    def wrapper(question: str):
+        initial_state: GraphState = {
+            "question": question,
+            "documents": [],
+            "vector_confident": False,
+            "generation": "",
+            "retriever": retriever,
+            "wiki": wiki,
+            "llm": llm
+        }
+        
+        # Fix: Properly extract the final state from stream
+        final_state = None
+        for state_update in compiled.stream(initial_state):
+            for node_name, node_state in state_update.items():
+                final_state = node_state
+        
+        return final_state if final_state else initial_state
+
+    return wrapper
+
+# --- Main Streamlit Chat Interface ---
 def main():
-    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if "source" in message:
-                st.caption(f"Source: {message['source']}")
+            if "source" in message and message["source"]:
+                if isinstance(message["source"], list):
+                    for src in message["source"]:
+                        st.caption(f"Source: {src}")
+                else:
+                    st.caption(f"Source: {message['source']}")
             if "source_info" in message:
                 st.caption(f"Document: {message['source_info']}")
 
-    # Process custom URLs
     url_list = [url.strip() for url in user_urls.split(",") if url.strip()] if user_urls.strip() else None
-    
-    # Initialize RAG pipeline
-    app, llm = setup_pipeline(custom_urls=url_list)
-    
-    # Chat input
+    retriever, wiki, llm = setup_pipeline(custom_urls=url_list)
+    rag_workflow = build_workflow(retriever, wiki, llm)
+
     if prompt := st.chat_input("Ask anything ..."):
-        # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display user message
         with st.chat_message("user"):
             st.markdown(prompt)
-        
-        # Generate assistant response
+
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             with st.spinner("Thinking..."):
-                answer, source = get_answer(app, prompt, llm)
-            
-            # Display response
-            message_placeholder.markdown(answer)
-            
-            # Display source info
-            for src in source:
+                output_state = rag_workflow(prompt)
+                answer = output_state.get("generation", "").strip()
+                docs = output_state.get("documents", [])
+                sources = list({doc.metadata.get("source", "Wikipedia") for doc in docs})
+
+            if answer:
+                message_placeholder.markdown(answer)
+            else:
+                message_placeholder.markdown("❌ Sorry, I couldn't generate an answer.")
+
+            for src in sources:
                 st.caption(f"Source: {src}")
 
-
-        
-        # Add assistant response to chat history
         st.session_state.messages.append({
             "role": "assistant",
-            "content": answer
-            ,
-            "source": source
+            "content": answer,
+            "source": sources
         })
 
 if __name__ == "__main__":
