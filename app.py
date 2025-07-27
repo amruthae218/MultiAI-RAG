@@ -171,7 +171,7 @@ def extract_answer(docs: List[Document]) -> str:
 # --- Vectorstore Retrieval Node ---
 def retrieve_vectorstore(state):
     question = state["question"]
-    threshold = 0  # Set to 0 during debugging to avoid filtering out docs
+    threshold = 0.6  # Set to 0 during debugging to avoid filtering out docs
     retriever = state["retriever"]
 
     results = []
