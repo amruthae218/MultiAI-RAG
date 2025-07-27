@@ -66,10 +66,14 @@ from bs4 import BeautifulSoup
 def setup_pipeline(custom_urls=None):
     load_dotenv()
 
-    ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-    ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
-    GROQ_KEY = os.getenv("GROQ_KEY")
-    HF_TOKEN = os.getenv("HF_TOKEN")
+    # ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
+    # ASTRA_DB_ID = os.getenv("ASTRA_DB_ID")
+    # GROQ_KEY = os.getenv("GROQ_KEY")
+    # HF_TOKEN = os.getenv("HF_TOKEN")
+    ASTRA_DB_APPLICATION_TOKEN = st.secrets["ASTRA_DB_APPLICATION_TOKEN"]
+    ASTRA_DB_ID = st.secrets["ASTRA_DB_ID"]
+    GROQ_KEY = st.secrets["GROQ_KEY"]
+    HF_TOKEN = st.secrets["HF_TOKEN"]
 
     if not (ASTRA_DB_APPLICATION_TOKEN and ASTRA_DB_ID and GROQ_KEY):
         st.error("One or more environment variables (ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_ID, GROQ_KEY) are missing!")
