@@ -13,3 +13,4 @@ requests
 sentence-transformers
 tiktoken
 numpy
+wikipedia
