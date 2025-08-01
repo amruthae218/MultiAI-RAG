@@ -34,7 +34,7 @@ if "messages" not in st.session_state:
     }]
 
 # --- UI Components ---
-st.title("🤖 RAG Chat Assistant")
+st.title("RAG Chat Assistant")
 st.caption("Powered by LangChain, Groq, and Astra DB")
 
 # Sidebar for configuration
